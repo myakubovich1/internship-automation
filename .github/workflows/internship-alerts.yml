@@ -24,10 +24,36 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Check active hours
+        id: active-hours
+        shell: bash
+        run: |
+          # Manual runs are always allowed so the workflow can be tested at any time.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "active=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run: bypassing overnight pause."
+            exit 0
+          fi
+
+          # Scheduled runs only do real work from 7:00 AM through 9:29 PM
+          # in America/New_York. TZ handles EST/EDT automatically.
+          NOW=$(TZ=America/New_York date +%H%M)
+          NOW_NUM=$((10#$NOW))
+
+          if [ "$NOW_NUM" -ge 700 ] && [ "$NOW_NUM" -lt 2130 ]; then
+            echo "active=true" >> "$GITHUB_OUTPUT"
+            echo "Active hours: continuing at $NOW America/New_York."
+          else
+            echo "active=false" >> "$GITHUB_OUTPUT"
+            echo "Overnight pause: skipping at $NOW America/New_York."
+          fi
+
       - name: Check out repository
+        if: steps.active-hours.outputs.active == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.active-hours.outputs.active == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -35,9 +61,11 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
+        if: steps.active-hours.outputs.active == 'true'
         run: pip install -r requirements.txt
 
       - name: Check zero2sudo Stories and email new opportunities
+        if: steps.active-hours.outputs.active == 'true'
         env:
           TARGET_USERNAME: zero2sudo
           GEMINI_MODEL: gemini-3.5-flash-lite
@@ -49,7 +77,7 @@ jobs:
         run: python main.py
 
       - name: Save processed Story IDs
-        if: success()
+        if: steps.active-hours.outputs.active == 'true' && success()
         run: |
           if git diff --quiet -- state.json; then
             echo "No state change."
