@@ -34,7 +34,7 @@ jobs:
       - name: Check zero2sudo Stories and email new opportunities
         env:
           TARGET_USERNAME: zero2sudo
-          GEMINI_MODEL: gemini-2.5-flash-lite
+          GEMINI_MODEL: gemini-3.5-flash-lite
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
