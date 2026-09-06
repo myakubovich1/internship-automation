@@ -3,7 +3,13 @@ name: Internship story alerts
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/20 * * * *"
+    # Exact 25-minute cadence. Because 25 does not divide evenly into 60,
+    # this uses a repeating 5-hour pattern rather than */25.
+    - cron: "0,25,50 0,5,10,15,20 * * *"
+    - cron: "15,40 1,6,11,16,21 * * *"
+    - cron: "5,30,55 2,7,12,17,22 * * *"
+    - cron: "20,45 3,8,13,18,23 * * *"
+    - cron: "10,35 4,9,14,19 * * *"
 
 permissions:
   contents: write
