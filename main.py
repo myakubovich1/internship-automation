@@ -7,6 +7,7 @@ import ssl
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from instagrapi import Client
@@ -145,6 +146,7 @@ Return ONLY valid JSON with this exact top-level shape:
       "location": "",
       "deadline": "",
       "application_url": "",
+      "visa_sponsorship": "yes|no|no_info",
       "summary": "",
       "urgency": "high|normal|low",
       "source_story_ids": [""]
@@ -160,14 +162,15 @@ Return ONLY valid JSON with this exact top-level shape:
 
 Rules:
 - Be concise and factual.
-- Do not invent company names, roles, dates, deadlines, or URLs.
+- Do not invent company names, roles, dates, deadlines, URLs, or sponsorship status.
 - Prefer a provided link sticker as application_url when it appears relevant.
-- Put genuine internship / early-career opportunities and recruiting updates in
-  "opportunities".
+- For visa_sponsorship, use "yes" only when the Story explicitly says visa/work sponsorship is available.
+- For visa_sponsorship, use "no" only when the Story explicitly says sponsorship is unavailable, applicants must already have unrestricted work authorization, or no current/future sponsorship will be provided.
+- Otherwise visa_sponsorship MUST be "no_info". Never infer sponsorship from the employer's reputation or usual practices.
+- Put genuine internship / early-career opportunities and recruiting updates in "opportunities".
 - Put unrelated or general content in "other_updates".
-- If a field is not visible or inferable from the story, use an empty string.
-- "high" urgency means an application just opened, is reopening, has a near
-  deadline, limited availability, or the story explicitly urges immediate action.
+- If a normal field is not visible or inferable from the story, use an empty string.
+- "high" urgency means an application just opened, is reopening, has a near deadline, limited availability, or the story explicitly urges immediate action.
 """.strip()
 
     parts = [{"text": prompt}]
@@ -210,7 +213,37 @@ Rules:
     return parse_json_response(text)
 
 
-def build_email_html(digest: dict, story_count: int) -> str:
+def format_posted_time(item: dict, metadata_by_id: dict) -> str:
+    source_ids = [str(x) for x in (item.get("source_story_ids") or [])]
+    parsed_times = []
+
+    for story_id in source_ids:
+        timestamp = (metadata_by_id.get(story_id) or {}).get("taken_at_utc") or ""
+        if not timestamp:
+            continue
+        try:
+            parsed_times.append(datetime.fromisoformat(timestamp.replace("Z", "+00:00")))
+        except ValueError:
+            continue
+
+    if not parsed_times:
+        return "No timestamp"
+
+    first_post = min(parsed_times).astimezone(ZoneInfo("America/New_York"))
+    zone_label = "EDT" if first_post.dst() else "EST"
+    return f"{first_post.strftime('%b %-d, %-I:%M %p')} {zone_label}"
+
+
+def sponsorship_label(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized == "yes":
+        return "Yes"
+    if normalized == "no":
+        return "No"
+    return "No info"
+
+
+def build_email_html(digest: dict, story_count: int, metadata_by_id: dict) -> str:
     opportunities = digest.get("opportunities") or []
     other_updates = digest.get("other_updates") or []
     summary = html.escape(digest.get("digest_summary") or f"{story_count} new stories.")
@@ -230,6 +263,8 @@ def build_email_html(digest: dict, story_count: int) -> str:
             season = html.escape(item.get("season_year") or "")
             location = html.escape(item.get("location") or "")
             deadline = html.escape(item.get("deadline") or "")
+            posted_time = html.escape(format_posted_time(item, metadata_by_id))
+            sponsorship = html.escape(sponsorship_label(item.get("visa_sponsorship") or ""))
             summary_text = html.escape(item.get("summary") or "")
             urgency = html.escape((item.get("urgency") or "normal").upper())
             application_url = item.get("application_url") or ""
@@ -238,6 +273,8 @@ def build_email_html(digest: dict, story_count: int) -> str:
             details = [x for x in [opp_type, season, location] if x]
             if details:
                 chunks.append(" · ".join(details) + "<br>")
+            chunks.append(f"Posted: {posted_time}<br>")
+            chunks.append(f"Visa sponsorship: {sponsorship}<br>")
             if deadline:
                 chunks.append(f"Deadline: {deadline}<br>")
             chunks.append(f"Urgency: {urgency}<br>")
@@ -262,7 +299,7 @@ def build_email_html(digest: dict, story_count: int) -> str:
     return "".join(chunks)
 
 
-def send_email(digest: dict, story_count: int) -> None:
+def send_email(digest: dict, story_count: int, metadata_by_id: dict) -> None:
     email_from = require_env("EMAIL_FROM")
     email_to = require_env("EMAIL_TO")
     app_password = require_env("GMAIL_APP_PASSWORD").replace(" ", "")
@@ -285,7 +322,7 @@ def send_email(digest: dict, story_count: int) -> None:
         (digest.get("digest_summary") or f"{story_count} new zero2sudo stories.")
         + "\n\nOpen the HTML version of this email for details."
     )
-    msg.add_alternative(build_email_html(digest, story_count), subtype="html")
+    msg.add_alternative(build_email_html(digest, story_count, metadata_by_id), subtype="html")
 
     context = ssl.create_default_context()
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
@@ -341,7 +378,7 @@ def main() -> int:
             }
         )
 
-    send_email(digest, len(new_ids))
+    send_email(digest, len(new_ids), metadata_by_id)
     save_state(seen_list + new_ids)
     print(f"Sent digest for {len(new_ids)} new stories.")
     return 0
